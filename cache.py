@@ -28,7 +28,7 @@ from typing import Optional
 DEFAULT_CACHE_ROOT = Path(
     __import__("os").environ.get(
         "WIKIMEDIA_IMAGE_CACHE",
-        "./data/images",
+        '/Volumes/Extreme SSD/webmaster-ai/POJO_PROJECT/data/images',
     )
 ).expanduser().resolve()
 

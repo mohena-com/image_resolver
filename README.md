@@ -78,17 +78,21 @@ The response contains:
 }
 ```
 
-## Cache location
+## Canonical cache location
 
-Set:
+This version uses this persistent cache by default:
 
-```bash
-export WIKIMEDIA_IMAGE_CACHE="/Volumes/Extreme SSD/webmaster-ai/POJO_PROJECT/data/images"
+```text
+/Volumes/Extreme SSD/webmaster-ai/POJO_PROJECT/data/images
 ```
 
-Then start:
+`run.sh` exports this path before starting Uvicorn and fails if the
+Extreme SSD path is not mounted.
+
+You can explicitly override it with:
 
 ```bash
+export WIKIMEDIA_IMAGE_CACHE="/some/other/path"
 ./run.sh
 ```
 

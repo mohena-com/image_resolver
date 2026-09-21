@@ -20,12 +20,26 @@ from wikimedia_commercial_safe_downloader import (
 
 APP_VERSION = "1.2.0"
 
+# Canonical persistent image cache. Override only if explicitly required.
 OUTPUT_ROOT = Path(
     os.environ.get(
         "WIKIMEDIA_IMAGE_CACHE",
-        str(DEFAULT_CACHE_ROOT),
+        '/Volumes/Extreme SSD/webmaster-ai/POJO_PROJECT/data/images',
     )
 ).expanduser().resolve()
+
+# Ensure the canonical cache structure exists at startup.
+OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
+for _category in (
+    "people",
+    "movies",
+    "shows",
+    "places",
+    "organizations",
+    "events",
+    "other",
+):
+    (OUTPUT_ROOT / _category).mkdir(parents=True, exist_ok=True)
 
 app = FastAPI(
     title="Wikimedia Commercial-Safe Image API",
@@ -104,6 +118,7 @@ def person_image(
             "cache_hit": True,
             "person": person_name,
             "category": "people",
+            "cache_root": str(OUTPUT_ROOT),
             "file": cached["file"],
             "file_title": cached.get("file_title"),
             "license": cached.get("license"),
@@ -170,6 +185,7 @@ def person_image(
         **result,
         "cache_hit": False,
         "category": "people",
+        "cache_root": str(OUTPUT_ROOT),
         "cached_at_utc": record.get("cached_at_utc"),
     }
 
