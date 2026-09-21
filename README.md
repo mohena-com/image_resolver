@@ -1,101 +1,117 @@
 # Wikimedia Commercial-Safe Image API
 
-FastAPI + Uvicorn API built around the conservative Wikimedia Commons
-copyright-license downloader.
+## One-call person image endpoint
 
-## Install
+The main API is now:
+
+```text
+GET /v1/person/{person_name}
+```
+
+Example:
+
+```bash
+curl "http://localhost:8000/v1/person/Katrina%20Kaif"
+```
+
+Optional candidate limit:
+
+```bash
+curl "http://localhost:8000/v1/person/Katrina%20Kaif?limit=30"
+```
+
+The API internally performs:
+
+```text
+person name
+   ↓
+Category:Person_Name
+   ↓
+scan Wikimedia Commons
+   ↓
+copyright-license filter
+   ↓
+personality/trademark review filter
+   ↓
+select approved candidate
+   ↓
+final metadata re-check
+   ↓
+download
+   ↓
+attribution + manifest
+   ↓
+JSON response
+```
+
+No separate client-side curl commands are required.
+
+## Start
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-```
-
-## Start with Uvicorn
-
-```bash
 ./run.sh
 ```
 
-or:
+Then:
 
 ```bash
-uvicorn app:app --host 0.0.0.0 --port 8000
+curl "http://localhost:8000/v1/person/Katrina%20Kaif"
 ```
 
-API documentation:
+Swagger:
 
-- `http://localhost:8000/docs`
-- `http://localhost:8000/redoc`
+```text
+http://localhost:8000/docs
+```
 
-## Endpoints
+## Output location
 
-### Health
+By default:
+
+```text
+./downloads/<Person_Name>/
+```
+
+You can change it:
 
 ```bash
-curl http://localhost:8000/health
+export WIKIMEDIA_OUTPUT_DIR=/path/to/downloads
+./run.sh
 ```
 
-### Scan a Commons category
+## Existing endpoints
 
-```bash
-curl -X POST http://localhost:8000/v1/scan   -H "Content-Type: application/json"   -d '{
-    "category": "Category:Katrina_Kaif",
-    "limit": 15
-  }'
-```
+The original endpoints remain:
 
-This only scans metadata. It does not download images.
+- `GET /health`
+- `POST /v1/scan`
+- `GET /v1/image/info`
+- `POST /v1/image/download`
 
-### Get metadata for one file
+`auto_download.py` is now an internal helper module used by
+`/v1/person/{person_name}` rather than a separate command-line workflow.
 
-```bash
-curl "http://localhost:8000/v1/image/info?file_title=File%3AExample.jpg"
-```
+## Automatic approval
 
-### Download a specific approved file
+The person endpoint automatically downloads only files with:
 
-```bash
-curl -X POST http://localhost:8000/v1/image/download   -H "Content-Type: application/json"   -d '{
-    "file_title": "File:Example.jpg"
-  }'
-```
+- `SAFE_WITH_ATTRIBUTION`, or
+- `SAFE_NO_ATTRIBUTION`
 
-The response includes the local image path, license, license URL, source
-page, author, SHA-256 hash and attribution/manifest paths.
+and:
 
-## Policy
+- no personality-rights review flag
+- no trademark review flag
+- `NO_AUTOMATED_NONCOPYRIGHT_CLEARANCE`
 
-The default automated download policy accepts:
+CC BY-SA, NC, ND, unknown licenses and flagged people/personality-rights
+cases are not automatically downloaded.
 
-- Public Domain / PD
-- CC0
-- CC BY
+## Important
 
-It rejects:
-
-- CC BY-NC
-- CC BY-ND
-- unknown licenses
-- other unrecognized licenses
-
-CC BY-SA is treated as review-only.
-
-Images involving identifiable people are also flagged for manual
-personality/publicity-rights review. The API does not claim that a copyright
-license clears those separate rights.
-
-## Production notes
-
-1. Put this API behind HTTPS/reverse proxy.
-2. Replace the User-Agent in
-   `wikimedia_commercial_safe_downloader.py` with a descriptive project
-   identity/contact address.
-3. Keep the generated JSON/CSV manifests and attribution files with your
-   publishing records.
-4. Do not use `--insecure` mode from the standalone downloader in production.
-5. Add authentication/rate limiting before exposing the API publicly.
-6. For celebrity/person photographs, perform manual rights review before
-   commercial publication.
-
-This project reduces copyright-license risk; it is not a legal guarantee.
+This is a conservative copyright-license screening and evidence workflow.
+It is not a legal guarantee. Separate publicity/personality, privacy,
+trademark, model-release and jurisdiction-specific rights can still apply.

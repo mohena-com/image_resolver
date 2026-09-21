@@ -1,13 +1,11 @@
 from __future__ import annotations
 
-import os
-import tempfile
 from pathlib import Path
-from typing import List, Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel, Field
 
+from auto_download import download_for_person
 from wikimedia_commercial_safe_downloader import (
     DEFAULT_CATEGORY,
     classify_license,
@@ -19,13 +17,22 @@ from wikimedia_commercial_safe_downloader import (
     write_manifest,
 )
 
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.1.0"
+
+# Images downloaded by the person endpoint are stored here unless the
+# WIKIMEDIA_OUTPUT_DIR environment variable is set.
+OUTPUT_ROOT = Path(
+    __import__("os").environ.get(
+        "WIKIMEDIA_OUTPUT_DIR",
+        "./downloads",
+    )
+).expanduser().resolve()
 
 app = FastAPI(
     title="Wikimedia Commercial-Safe Image API",
     description=(
-        "Uvicorn/FastAPI service around a conservative Wikimedia Commons "
-        "copyright-license filter."
+        "FastAPI/Uvicorn service for conservative Wikimedia Commons "
+        "copyright-license screening and image download."
     ),
     version=APP_VERSION,
 )
@@ -40,36 +47,9 @@ class ScanRequest(BaseModel):
 
 
 class DownloadRequest(BaseModel):
-    file_title: str = Field(
-        ...,
-        description="Exact Wikimedia Commons file title, e.g. File:Example.jpg",
-    )
-    output_dir: Optional[str] = Field(
-        default=None,
-        description="Optional server-side output directory.",
-    )
-    allow_review_images: bool = Field(
-        default=False,
-        description=(
-            "Allow CC BY-SA or images requiring personality-rights review. "
-            "Use only when you will manually review the result."
-        ),
-    )
-
-
-def get_info_or_404(file_title: str):
-    session = create_session()
-    try:
-        info = get_image_info(session, file_title)
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-
-    if not info:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Could not find image metadata for: {file_title}",
-        )
-    return session, info
+    file_title: str = Field(..., description="Exact Wikimedia Commons file title")
+    output_dir: str | None = None
+    allow_review_images: bool = False
 
 
 @app.get("/health")
@@ -88,16 +68,57 @@ def root():
         "version": APP_VERSION,
         "docs": "/docs",
         "health": "/health",
+        "person_endpoint": "/v1/person/{person_name}",
     }
+
+
+@app.get("/v1/person/{person_name}")
+def person_image(
+    person_name: str,
+    limit: int = Query(
+        default=15,
+        ge=1,
+        le=500,
+        description="Number of Commons category files to inspect.",
+    ),
+):
+    """
+    One-call workflow:
+
+        GET /v1/person/Katrina%20Kaif
+
+    Internally:
+      category -> scan -> license filter -> rights filter ->
+      metadata re-check -> download -> attribution/manifest.
+
+    The endpoint never enables review images automatically.
+    """
+    try:
+        result = download_for_person(
+            person_name=person_name,
+            output_root=OUTPUT_ROOT,
+            limit=limit,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Wikimedia lookup/download failed: {exc}",
+        ) from exc
+
+    if not result.get("success"):
+        # 404 means the requested person category had no automatically
+        # approved image; this is not a server failure.
+        if result.get("reason") == "NO_AUTOMATICALLY_APPROVED_IMAGE":
+            raise HTTPException(status_code=404, detail=result)
+        raise HTTPException(status_code=422, detail=result)
+
+    return result
 
 
 @app.post("/v1/scan")
 def scan(request: ScanRequest):
-    """
-    Scan a Commons category and classify every candidate.
-
-    This endpoint does NOT download files.
-    """
     session = create_session()
 
     try:
@@ -134,30 +155,36 @@ def scan(request: ScanRequest):
 
 @app.get("/v1/image/info")
 def image_info(file_title: str):
-    """
-    Return Wikimedia metadata and the automated copyright/right-status
-    classification without downloading the image.
-    """
-    _, info = get_info_or_404(file_title)
+    session = create_session()
+
+    try:
+        info = get_image_info(session, file_title)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    if not info:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Could not find image metadata for: {file_title}",
+        )
+
     return info
 
 
 @app.post("/v1/image/download")
 def image_download(request: DownloadRequest):
-    """
-    Download exactly one Wikimedia file after applying the conservative
-    license filter.
+    session = create_session()
 
-    Default policy:
-      SAFE_WITH_ATTRIBUTION
-      SAFE_NO_ATTRIBUTION
+    try:
+        info = get_image_info(session, request.file_title)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
-    CC BY-SA and identifiable-person cases require explicit
-    allow_review_images=true.
-    """
-    session, info = get_info_or_404(request.file_title)
+    if not info:
+        raise HTTPException(status_code=404, detail="Image not found.")
 
     status = info["license_status"]
+
     copyright_ok = status in {
         "SAFE_WITH_ATTRIBUTION",
         "SAFE_NO_ATTRIBUTION",
@@ -193,11 +220,12 @@ def image_download(request: DownloadRequest):
             },
         )
 
-    if request.output_dir:
-        output_dir = Path(request.output_dir).expanduser().resolve()
-        output_dir.mkdir(parents=True, exist_ok=True)
-    else:
-        output_dir = Path(tempfile.mkdtemp(prefix="wikimedia_api_"))
+    output_dir = (
+        Path(request.output_dir).expanduser().resolve()
+        if request.output_dir
+        else Path("./downloads").resolve()
+    )
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     try:
         result = download_image(session, info, output_dir)
@@ -210,13 +238,14 @@ def image_download(request: DownloadRequest):
             detail="Wikimedia image could not be downloaded.",
         )
 
-    # Persist a machine-readable audit trail alongside the image.
     write_manifest([result], output_dir)
     write_attribution_files([result], output_dir)
 
+    local_file = Path(result["local_file"])
+
     return {
         "success": True,
-        "file": result.get("local_file"),
+        "file": str(local_file),
         "license": result.get("license"),
         "license_status": result.get("license_status"),
         "license_url": result.get("license_url"),
@@ -228,8 +257,7 @@ def image_download(request: DownloadRequest):
         ),
         "download_sha256": result.get("download_sha256"),
         "attribution_file": str(
-            output_dir
-            / f"{Path(result['local_file']).stem}_ATTRIBUTION.txt"
+            output_dir / f"{local_file.stem}_ATTRIBUTION.txt"
         ),
         "manifest_file": str(
             output_dir / "commons_license_manifest.json"
