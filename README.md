@@ -1,8 +1,8 @@
 # Wikimedia Commercial-Safe Image API
 
-## One-call person image endpoint
+## One-call person lookup + local cache
 
-The main API is now:
+The main endpoint is:
 
 ```text
 GET /v1/person/{person_name}
@@ -14,104 +14,155 @@ Example:
 curl "http://localhost:8000/v1/person/Katrina%20Kaif"
 ```
 
-Optional candidate limit:
+### First request
 
-```bash
-curl "http://localhost:8000/v1/person/Katrina%20Kaif?limit=30"
-```
-
-The API internally performs:
+If Katrina Kaif is not cached:
 
 ```text
-person name
-   ↓
-Category:Person_Name
-   ↓
-scan Wikimedia Commons
-   ↓
-copyright-license filter
-   ↓
-personality/trademark review filter
-   ↓
-select approved candidate
-   ↓
-final metadata re-check
-   ↓
+GET /v1/person/Katrina Kaif
+        ↓
+people/Katrina_Kaif/
+        ↓
+Wikimedia Commons
+        ↓
+license + rights filtering
+        ↓
+approved image
+        ↓
 download
-   ↓
-attribution + manifest
-   ↓
-JSON response
+        ↓
+local cache
+        ↓
+index.json
+        ↓
+response
 ```
 
-No separate client-side curl commands are required.
+### Second request
 
-## Start
-
-```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-./run.sh
-```
-
-Then:
+The same request:
 
 ```bash
 curl "http://localhost:8000/v1/person/Katrina%20Kaif"
 ```
 
-Swagger:
+does NOT call Wikimedia again.
+
+It does:
 
 ```text
-http://localhost:8000/docs
+GET /v1/person/Katrina Kaif
+        ↓
+index.json
+        ↓
+people/Katrina_Kaif/<image>
+        ↓
+CACHE HIT
+        ↓
+response
 ```
 
-## Output location
+The response contains:
 
-By default:
-
-```text
-./downloads/<Person_Name>/
+```json
+{
+  "success": true,
+  "cache_hit": true,
+  "person": "Katrina Kaif",
+  "category": "people",
+  "file": "/Volumes/.../images/people/...",
+  "license": "CC BY 4.0",
+  "author": "...",
+  "license_url": "...",
+  "download_sha256": "..."
+}
 ```
 
-You can change it:
+## Cache location
+
+Set:
 
 ```bash
-export WIKIMEDIA_OUTPUT_DIR=/path/to/downloads
+export WIKIMEDIA_IMAGE_CACHE="/Volumes/Extreme SSD/webmaster-ai/POJO_PROJECT/data/images"
+```
+
+Then start:
+
+```bash
 ./run.sh
 ```
 
-## Existing endpoints
+The resulting structure is:
 
-The original endpoints remain:
+```text
+data/images/
+├── people/
+├── movies/
+├── shows/
+├── places/
+├── organizations/
+├── events/
+├── other/
+└── index.json
+```
+
+The current `/v1/person/{person_name}` endpoint stores images under:
+
+```text
+people/
+```
+
+For example:
+
+```text
+people/
+└── Katrina_Kaif/
+    ├── <image>.jpg
+    ├── <image>_ATTRIBUTION.txt
+    └── commons_license_manifest.json
+```
+
+and the global:
+
+```text
+index.json
+```
+
+contains the cache mapping.
+
+## Cache behavior
+
+The cache is keyed by:
+
+```text
+people:<normalized_person_name>
+```
+
+A cache hit is valid only when the indexed local file still exists.
+
+If the file is deleted, the next request becomes a cache miss and the API
+will query Wikimedia again.
+
+## Existing endpoints
 
 - `GET /health`
 - `POST /v1/scan`
 - `GET /v1/image/info`
 - `POST /v1/image/download`
+- `GET /v1/person/{person_name}`
 
-`auto_download.py` is now an internal helper module used by
-`/v1/person/{person_name}` rather than a separate command-line workflow.
+## Automatic rights policy
 
-## Automatic approval
+The person endpoint automatically accepts only:
 
-The person endpoint automatically downloads only files with:
+- Public Domain / PD
+- CC0
+- CC BY
 
-- `SAFE_WITH_ATTRIBUTION`, or
-- `SAFE_NO_ATTRIBUTION`
+and requires no personality-rights or trademark review flag.
 
-and:
+CC BY-SA, NC, ND, unknown licenses and images requiring manual
+personality/publicity-rights review are not automatically downloaded.
 
-- no personality-rights review flag
-- no trademark review flag
-- `NO_AUTOMATED_NONCOPYRIGHT_CLEARANCE`
-
-CC BY-SA, NC, ND, unknown licenses and flagged people/personality-rights
-cases are not automatically downloaded.
-
-## Important
-
-This is a conservative copyright-license screening and evidence workflow.
-It is not a legal guarantee. Separate publicity/personality, privacy,
-trademark, model-release and jurisdiction-specific rights can still apply.
+This is a conservative copyright-license screening workflow, not a legal
+guarantee.
