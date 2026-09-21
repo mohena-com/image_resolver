@@ -1,4 +1,7 @@
-python wikimedia_commercial_safe_downloader.py \
-  --category "Category:Katrina_Kaif" \
-  --limit 15 \
-  --output commons_downloads
+#!/usr/bin/env bash
+set -euo pipefail
+
+HOST="${HOST:-0.0.0.0}"
+PORT="${PORT:-8000}"
+
+exec uvicorn app:app --host "$HOST" --port "$PORT"

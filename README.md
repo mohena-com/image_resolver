@@ -1,49 +1,101 @@
-# Reusable Image Resolver API
+# Wikimedia Commercial-Safe Image API
 
-A standalone FastAPI/Uvicorn service for resolving a named entity into a cached image.
+FastAPI + Uvicorn API built around the conservative Wikimedia Commons
+copyright-license downloader.
 
-## Start
+## Install
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-uvicorn app.main:app --host 0.0.0.0 --port 8010
 ```
 
-## Test
-
-Health:
+## Start with Uvicorn
 
 ```bash
-curl http://127.0.0.1:8010/health
+./run.sh
 ```
 
-Resolve an entity:
+or:
 
 ```bash
-curl -X POST http://127.0.0.1:8010/image \
-  -H "Content-Type: application/json" \
-  -d '{"name":"Sayani Gupta","type":"person"}'
+uvicorn app:app --host 0.0.0.0 --port 8000
 ```
 
-Get the actual image:
+API documentation:
 
-```text
-http://127.0.0.1:8010/image/person/Sayani%20Gupta
+- `http://localhost:8000/docs`
+- `http://localhost:8000/redoc`
+
+## Endpoints
+
+### Health
+
+```bash
+curl http://localhost:8000/health
 ```
 
-## Architecture
+### Scan a Commons category
 
-1. Cache lookup
-2. Wikipedia article search + lead image
-3. Commons fallback
-4. License verification for Commons
-5. Persistent local cache
+```bash
+curl -X POST http://localhost:8000/v1/scan   -H "Content-Type: application/json"   -d '{
+    "category": "Category:Katrina_Kaif",
+    "limit": 15
+  }'
+```
 
-Wikipedia images are returned as `NOT_VERIFIED` because this service does not
-silently infer a license from the Wikipedia article. Commons images must pass
-the configured license allow-list.
+This only scans metadata. It does not download images.
 
-The image resolver is deliberately independent of BollywoodKoko and can be
-used by other projects.
+### Get metadata for one file
+
+```bash
+curl "http://localhost:8000/v1/image/info?file_title=File%3AExample.jpg"
+```
+
+### Download a specific approved file
+
+```bash
+curl -X POST http://localhost:8000/v1/image/download   -H "Content-Type: application/json"   -d '{
+    "file_title": "File:Example.jpg"
+  }'
+```
+
+The response includes the local image path, license, license URL, source
+page, author, SHA-256 hash and attribution/manifest paths.
+
+## Policy
+
+The default automated download policy accepts:
+
+- Public Domain / PD
+- CC0
+- CC BY
+
+It rejects:
+
+- CC BY-NC
+- CC BY-ND
+- unknown licenses
+- other unrecognized licenses
+
+CC BY-SA is treated as review-only.
+
+Images involving identifiable people are also flagged for manual
+personality/publicity-rights review. The API does not claim that a copyright
+license clears those separate rights.
+
+## Production notes
+
+1. Put this API behind HTTPS/reverse proxy.
+2. Replace the User-Agent in
+   `wikimedia_commercial_safe_downloader.py` with a descriptive project
+   identity/contact address.
+3. Keep the generated JSON/CSV manifests and attribution files with your
+   publishing records.
+4. Do not use `--insecure` mode from the standalone downloader in production.
+5. Add authentication/rate limiting before exposing the API publicly.
+6. For celebrity/person photographs, perform manual rights review before
+   commercial publication.
+
+This project reduces copyright-license risk; it is not a legal guarantee.
