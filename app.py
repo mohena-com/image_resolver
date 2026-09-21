@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from auto_download import download_for_person
@@ -80,32 +81,26 @@ def root():
         "docs": "/docs",
         "health": "/health",
         "person_endpoint": "/v1/person/{person_name}",
+        "person_image_endpoint": "/v1/person/{person_name}/image",
         "cache_root": str(OUTPUT_ROOT),
     }
 
 
-@app.get("/v1/person/{person_name}")
-def person_image(
-    person_name: str,
-    limit: int = Query(default=15, ge=1, le=500),
-):
+def _resolve_person_image(person_name: str, limit: int = 15) -> dict:
     """
-    One-call person lookup with local cache.
+    Resolve a person to a locally cached, automatically approved image.
 
-    First hit:
-        local cache -> MISS -> Wikimedia scan -> approved image download
-        -> people/<person>.jpg -> index.json
+    Returns the same metadata used by both:
+      GET /v1/person/{person_name}
+      GET /v1/person/{person_name}/image
 
-    Second/subsequent hit:
-        local cache -> HIT -> return existing image
-        (no Wikimedia API call and no second download)
+    Cache is always the canonical external-SSD cache.
     """
     person_name = " ".join(person_name.strip().split())
 
     if not person_name:
         raise HTTPException(status_code=400, detail="Person name is required.")
 
-    # IMPORTANT: people is the corresponding cache folder for this endpoint.
     cached = find_cached(
         name=person_name,
         category="people",
@@ -152,7 +147,6 @@ def person_image(
             raise HTTPException(status_code=404, detail=result)
         raise HTTPException(status_code=422, detail=result)
 
-    # Persist one canonical index record.
     file_path = result["file"]
     attribution_file = result.get("attribution_file")
     manifest_file = result.get("manifest_file")
@@ -188,6 +182,71 @@ def person_image(
         "cache_root": str(OUTPUT_ROOT),
         "cached_at_utc": record.get("cached_at_utc"),
     }
+
+
+@app.get("/v1/person/{person_name}")
+def person_image(
+    person_name: str,
+    limit: int = Query(default=15, ge=1, le=500),
+):
+    """
+    Return JSON metadata for the cached/downloaded approved image.
+    """
+    return _resolve_person_image(person_name, limit)
+
+
+@app.get("/v1/person/{person_name}/image")
+def person_image_file(
+    person_name: str,
+    limit: int = Query(default=15, ge=1, le=500),
+):
+    """
+    Return the actual image bytes.
+
+    First hit:
+        cache miss -> Wikimedia screening/download -> cache -> image response
+
+    Subsequent hits:
+        cache hit -> image response
+
+    The client receives the image itself, not the Mac filesystem path.
+    """
+    result = _resolve_person_image(person_name, limit)
+
+    file_path = Path(result["file"])
+
+    if not file_path.exists() or not file_path.is_file():
+        raise HTTPException(
+            status_code=500,
+            detail="Cached image was reported but the local file is missing.",
+        )
+
+    suffix = file_path.suffix.lower()
+    media_types = {
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".png": "image/png",
+        ".webp": "image/webp",
+        ".gif": "image/gif",
+        ".tif": "image/tiff",
+        ".tiff": "image/tiff",
+        ".svg": "image/svg+xml",
+    }
+
+    return FileResponse(
+        path=str(file_path),
+        media_type=media_types.get(suffix, "application/octet-stream"),
+        filename=file_path.name,
+        headers={
+            "X-Image-Cache-Hit": str(result.get("cache_hit", False)).lower(),
+            "X-Image-License": str(result.get("license") or ""),
+            "X-Image-License-Status": str(
+                result.get("license_status") or ""
+            ),
+            "X-Image-Author": str(result.get("author") or ""),
+            "X-Image-SHA256": str(result.get("download_sha256") or ""),
+        },
+    )
 
 
 @app.post("/v1/scan")

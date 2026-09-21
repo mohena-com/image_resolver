@@ -170,3 +170,56 @@ personality/publicity-rights review are not automatically downloaded.
 
 This is a conservative copyright-license screening workflow, not a legal
 guarantee.
+
+
+## Return the actual image
+
+The API now provides:
+
+```text
+GET /v1/person/{person_name}/image
+```
+
+From another machine on the same network:
+
+```text
+http://192.168.1.2:8000/v1/person/Katrina%20Kaif/image
+```
+
+Replace `192.168.1.2` with the Mac's LAN IP.
+
+The browser receives the actual JPEG/PNG bytes. It does not receive the
+Mac's `/Volumes/Extreme SSD/...` path.
+
+The same cache is used:
+
+```text
+First request
+    -> cache miss
+    -> Wikimedia approval/download
+    -> external SSD cache
+    -> image bytes
+
+Second request
+    -> cache hit
+    -> external SSD cache
+    -> image bytes
+```
+
+The response includes HTTP headers such as:
+
+```text
+X-Image-Cache-Hit
+X-Image-License
+X-Image-License-Status
+X-Image-Author
+X-Image-SHA256
+```
+
+The JSON endpoint remains available:
+
+```text
+GET /v1/person/{person_name}
+```
+
+Use that when your application needs metadata rather than the image.
